@@ -1,0 +1,21 @@
+# Artefactos de compilación .NET
+bin/
+obj/
+
+# Navegadores y binarios de Playwright
+**/.playwright/
+.playwright/
+
+# Salida del scraper (datos generados)
+output/
+
+# Config local con secretos (si aplica)
+appsettings.local.json
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+*.user
+
+# macOS
+.DS_Store
