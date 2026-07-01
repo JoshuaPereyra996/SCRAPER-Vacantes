@@ -15,7 +15,7 @@ namespace OccScraper.Services;
 ///   lss = salario formateado, dluf = fecha (texto), dlur = fecha relativa,
 ///   ld = descripción (HTML), ur = URL relativa canónica, cat = categoría.
 /// </summary>
-public static class VacanteParser
+public static class OccVacanteParser
 {
     /// <summary>
     /// Parsea el JSON crudo y devuelve la lista de vacantes limpias.
@@ -62,6 +62,7 @@ public static class VacanteParser
 
                 var vacante = new Vacante
                 {
+                    Fuente = "occ",
                     JobId = jobId,
                     Titulo = ObtenerCadena(o, "t") ?? ObtenerCadena(o, "ltr") ?? ObtenerCadena(o, "lc"),
                     Empresa = ObtenerCadena(o, "cn"),

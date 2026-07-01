@@ -1,37 +1,42 @@
-# OccScraper — Scraper de vacantes de OCC.com.mx
+# Scraper de vacantes (OCC.com.mx y Computrabajo)
 
 Aplicación de consola en **C# / .NET 8** que realiza **una** búsqueda de empleo en
-[OCC.com.mx](https://www.occ.com.mx), intercepta la respuesta del endpoint interno
-`/offer/search` mediante un navegador real (Playwright), extrae las vacantes con su
-URL pública y guarda los resultados en archivos JSON.
+[OCC.com.mx](https://www.occ.com.mx) o en
+[Computrabajo MX](https://mx.computrabajo.com), usando un navegador real (Playwright),
+extrae las vacantes con su URL pública y guarda los resultados en archivos JSON.
+
+El sitio se elige con el parámetro `--sitio occ|computrabajo` (o en `appsettings.json`).
 
 > ⚠️ **Por qué Playwright y no una llamada HTTP directa:**
-> los endpoints internos de OCC requieren la sesión real del navegador (cookies y
-> cabeceras que genera el JavaScript del sitio). No se pueden llamar a mano. Por eso
-> dejamos que un Chromium real cargue la página y **interceptamos** las respuestas JSON.
+> ambos sitios requieren una sesión real del navegador (cookies y cabeceras que genera
+> el JS / que protegen el contenido). Computrabajo además responde **403** a la página
+> de detalle si la pides sin navegador. Por eso un Chromium real carga las páginas.
 
-## Cómo funciona realmente (arquitectura descubierta)
+## Cómo funciona cada sitio
 
-Tras analizar el tráfico real de OCC, el flujo de datos es este:
+Cada sitio implementa la interfaz `ISitioScraper` (`Services/ISitioScraper.cs`) y se
+encarga de su propia navegación, extracción y parseo a `Vacante`.
 
-1. La página de resultados (`/empleos/de-{empleo}/en-{ciudad}/`) se renderiza en el
-   servidor e **incrusta la lista de ids** de las vacantes, pero **no su contenido**.
-2. El POST a `api-collector.occ.com.mx/offer/search` resultó ser solo **telemetría**
-   (responde `"OK"`), **no** la fuente de datos como se pensó al inicio.
-3. El **contenido completo** de cada vacante lo entrega el endpoint
-   `https://oferta.occ.com.mx/offer/{id}/d/j` (JSON), que la página dispara al
-   **seleccionar una tarjeta** y que requiere la sesión del navegador.
+### OCC (`Services/OccScraperService.cs`) — datos vía JSON interceptado
 
-Por eso el scraper:
+1. La página de resultados (`/empleos/de-{empleo}/en-{ciudad}/`) incrusta la lista de
+   ids pero **no el contenido**. El POST a `api-collector.occ.com.mx/offer/search` es
+   solo **telemetría** (responde `"OK"`), no datos.
+2. El contenido real lo da `https://oferta.occ.com.mx/offer/{id}/d/j` (JSON), que la
+   página dispara al **seleccionar una tarjeta** y requiere la sesión del navegador.
+3. El scraper hace **clic en cada tarjeta** e **intercepta** esas respuestas JSON.
+4. Resultado crudo: un array JSON (`raw_occ_*.json`). ~21 vacantes por búsqueda.
 
-1. Carga la página de resultados con Chromium.
-2. Registra un handler que **intercepta** las respuestas de `/offer/{id}/d/j`.
-3. Hace **clic en cada tarjeta** (`data-offers-grid-offer-item-container`) para que el
-   sitio pida su detalle con la sesión correcta, y captura ese JSON rico.
-4. Combina todos los detalles, los guarda crudos y los parsea a `Vacante`.
+### Computrabajo (`Services/ComputrabajoScraperService.cs`) — datos vía HTML (SSR)
 
-> Resultado típico: ~21–22 vacantes por búsqueda (primera página), cada una con título,
-> empresa, ubicación, salario, fecha, descripción y URL pública navegable.
+1. La página de resultados (`/trabajo-de-{empleo}-en-{ciudad}`) está renderizada en el
+   servidor: cada vacante es un `<article class="box_offer">` con título, empresa,
+   ubicación, salario y fecha **directamente en el HTML**.
+2. El scraper extrae esos campos de cada tarjeta con selectores de Playwright.
+3. La **descripción completa** no está en la lista: se obtiene **visitando la página de
+   cada oferta** (`div[div-link="oferta"]`), que da 403 sin navegador real.
+4. Resultado crudo: el HTML de la página de resultados (`raw_computrabajo_*.html`).
+   ~20 vacantes por búsqueda.
 
 ---
 
@@ -111,8 +116,9 @@ Edita `appsettings.json` para definir la búsqueda y el comportamiento del naveg
 ```jsonc
 {
   "Busqueda": {
+    "sitio": "occ",                // 'occ' o 'computrabajo'
     "empleo": "analista",          // palabra clave del puesto
-    "ciudad": "ciudad-de-mexico"   // ciudad en formato slug de OCC
+    "ciudad": "ciudad-de-mexico"   // ciudad en formato slug
   },
   "Playwright": {
     "headless": true,              // false = ver el navegador (depuración)
@@ -144,11 +150,15 @@ dotnet run
 ### Búsqueda con parámetros por línea de comandos (sobrescriben el JSON)
 
 ```bash
+# OCC (por defecto)
 dotnet run -- --empleo "contador" --ciudad "monterrey"
+
+# Computrabajo
+dotnet run -- --sitio computrabajo --empleo "contador" --ciudad "guadalajara"
 ```
 
 > Cada ejecución realiza **una sola búsqueda** y captura la **primera página** de
-> resultados. La paginación queda preparada pero desactivada por defecto.
+> resultados.
 
 ---
 
@@ -158,11 +168,12 @@ Tras una ejecución exitosa se generan dos archivos en la carpeta `output/`:
 
 | Archivo | Contenido |
 |---------|-----------|
-| `raw_{empleo}_{ciudad}_{timestamp}.json` | El JSON **crudo y completo** tal cual lo devolvió `/offer/search`. |
-| `vacantes_{empleo}_{ciudad}_{timestamp}.json` | Array **limpio** de objetos `Vacante`. |
+| `raw_{sitio}_{empleo}_{ciudad}_{timestamp}.{json\|html}` | El contenido **crudo** tal cual lo entregó el sitio (JSON en OCC, HTML en Computrabajo). |
+| `vacantes_{sitio}_{empleo}_{ciudad}_{timestamp}.json` | Array **limpio** de objetos `Vacante`. |
 
 Cada `Vacante` incluye al menos:
 
+- Fuente (`occ` / `computrabajo`)
 - Título del puesto
 - Empresa
 - Ubicación / ciudad
@@ -182,21 +193,24 @@ caracteres no-ASCII).
 
 ```
 SCRAPER Vacantes/
-├── OccScraper.csproj            # Proyecto de consola .NET 8 + Playwright
-├── appsettings.json             # Parámetros configurables
-├── README.md                    # Este archivo
-├── Program.cs                   # Orquestación
+├── OccScraper.csproj                  # Proyecto de consola .NET 8 + Playwright
+├── appsettings.json                   # Parámetros configurables (incluye 'sitio')
+├── README.md                          # Este archivo
+├── Program.cs                         # Orquestación + selección de sitio
 ├── Models/
-│   └── Vacante.cs               # Modelo de salida
+│   └── Vacante.cs                     # Modelo de salida (común a todos los sitios)
 ├── Services/
-│   ├── OccConstants.cs          # Endpoints, URLs base y patrones
-│   ├── OccScraperService.cs     # Playwright + interceptación
-│   └── VacanteParser.cs         # JSON crudo → modelo limpio
-└── output/                      # Resultados (se crea en tiempo de ejecución)
+│   ├── ISitioScraper.cs               # Interfaz común + OpcionesScraper + ResultadoScrape
+│   ├── OccConstants.cs                # OCC: endpoints, URLs, selectores
+│   ├── OccScraperService.cs           # OCC: Playwright + interceptación JSON
+│   ├── OccVacanteParser.cs            # OCC: JSON crudo → Vacante
+│   ├── ComputrabajoConstants.cs       # Computrabajo: URLs y selectores
+│   └── ComputrabajoScraperService.cs  # Computrabajo: extracción de HTML SSR
+└── output/                            # Resultados (se crea en tiempo de ejecución)
 ```
 
-> **Estado actual:** proyecto completo y **compilando sin errores**. Todos los
-> archivos están entregados.
+> Para añadir otro sitio: crea `XxxScraperService : ISitioScraper`, sus constantes, y
+> registra el caso en el `switch` de `Program.cs`.
 
 ---
 

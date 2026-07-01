@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Qué es
 
-Aplicación de consola C# / .NET 8 que hace **una** búsqueda de empleo en OCC.com.mx
-usando Playwright (Chromium headless), extrae las vacantes de la primera página de
-resultados y las guarda como JSON. Uso personal, de bajo volumen.
+Aplicación de consola C# / .NET 8 que hace **una** búsqueda de empleo en **OCC.com.mx** o
+**Computrabajo MX** usando Playwright (Chromium headless), extrae las vacantes de la primera
+página de resultados y las guarda como JSON. Uso personal, de bajo volumen. El sitio se elige
+con `--sitio occ|computrabajo` (o en `appsettings.json` → `Busqueda:sitio`).
 
 ## Comandos
 
@@ -24,9 +25,11 @@ playwright install chromium
 dotnet run
 
 # Ejecutar con parámetros (sobrescriben appsettings.json)
-dotnet run -- --empleo "contador" --ciudad "guadalajara"
+dotnet run -- --sitio occ --empleo "contador" --ciudad "guadalajara"
+dotnet run -- --sitio computrabajo --empleo "analista" --ciudad "ciudad-de-mexico"
 
-# Ejecutar con diagnóstico (registra cada respuesta de detalle interceptada)
+# Ejecutar con diagnóstico (OCC: detalles interceptados; Computrabajo: vuelca el HTML
+# de la primera página de detalle en output/_debug_detalle_ct.html para afinar selectores)
 DEBUG_RESPONSES=1 dotnet run
 ```
 
@@ -40,11 +43,22 @@ El SDK instalado puede ser **.NET 10**, no 8. El proyecto apunta a `net8.0` pero
 mayor disponible. Sin eso, `dotnet run` falla con "Microsoft.NETCore.App 8.0.0 not found".
 No cambies el target a net10.0 para "arreglar" esto; el RollForward es la solución.
 
-## Arquitectura: cómo se obtienen los datos realmente
+## Arquitectura multi-sitio
 
-Esto es lo más importante y no es obvio leyendo el código aislado. **El supuesto inicial
-(documentado en el spec) de que `api-collector.occ.com.mx/offer/search` devuelve los datos
-es FALSO**: ese endpoint es solo telemetría y responde `"OK"`.
+Cada sitio implementa `ISitioScraper` (`Services/ISitioScraper.cs`):
+`Task<ResultadoScrape?> BuscarAsync(empleo, ciudad)`, donde `ResultadoScrape` lleva el
+contenido **crudo** (con su extensión: "json" u "html") y la `List<Vacante>` ya parseada.
+Cada scraper hace su propia navegación, extracción Y parseo. `Program.cs` solo elige el
+scraper en un `switch` según `--sitio` y guarda los dos archivos. `Models/Vacante` es común
+(incluye `Fuente`). **Para añadir un sitio**: nuevo `XxxScraperService : ISitioScraper` +
+`XxxConstants` + caso en el `switch`. No metas lógica específica de sitio en `Program.cs`.
+
+Los dos sitios usan mecanismos de datos **completamente distintos**:
+
+## OCC: datos vía JSON interceptado
+
+**El supuesto inicial (del spec) de que `api-collector.occ.com.mx/offer/search` devuelve los
+datos es FALSO**: ese endpoint es solo telemetría y responde `"OK"`.
 
 El flujo real, implementado en `Services/OccScraperService.cs`:
 
@@ -62,9 +76,9 @@ El flujo real, implementado en `Services/OccScraperService.cs`:
 
 Es normal obtener ~21 de 22 detalles: alguna tarjeta es patrocinada/anuncio sin detalle JSON.
 
-## Estructura del JSON de detalle (para el parser)
+## Estructura del JSON de detalle de OCC (para el parser)
 
-`Services/VacanteParser.cs` mapea el array de detalles a `Models/Vacante`. Cada detalle es
+`Services/OccVacanteParser.cs` mapea el array de detalles a `Models/Vacante`. Cada detalle es
 `{ "o": {...}, "c": {...}, ... }`; los campos relevantes están en la sección **`o`** con
 nombres abreviados:
 
@@ -79,13 +93,30 @@ nombres abreviados:
 | `ld` | descripción en HTML (el parser quita tags y decodifica entidades) |
 | `ur` | URL relativa canónica → se antepone `OccConstants.SitioBase` para la URL pública |
 
-Si OCC cambia estos nombres, ajusta los mapeos en `VacanteParser.Parsear` y las claves en
+Si OCC cambia estos nombres, ajusta los mapeos en `OccVacanteParser.Parsear` y las claves en
 los helpers del mismo archivo.
+
+## Computrabajo: datos vía HTML (SSR)
+
+Mucho más simple que OCC. La página de resultados (`/trabajo-de-{empleo}-en-{ciudad}`) está
+renderizada en el servidor: cada vacante es un `<article class="box_offer">` con título,
+empresa, ubicación, salario y fecha **en el HTML**. `Services/ComputrabajoScraperService.cs`:
+
+1. Navega a la página de resultados y extrae cada tarjeta con los selectores de
+   `ComputrabajoConstants` (título, empresa, ubicación, salario, fecha, `data-id`=jobid).
+2. La **descripción NO está en la lista**: se obtiene **navegando a la página de cada oferta**
+   (selector `[div-link="oferta"]`). Esa página da **403 por curl/HTTP plano** — requiere el
+   navegador real, por eso se hace con Playwright dentro de la sesión.
+3. El crudo guardado es el HTML de la página de resultados (`raw_computrabajo_*.html`).
+
+Notas: el salario sale del `<span>` padre del icono `.i_salary` (ver `SalarioLocator`); el
+selector de descripción `p.mbB` solo NO sirve (hay varios; uno es el banner "Ocultaste esta
+oferta") — por eso se ancla al contenedor `[div-link="oferta"]`.
 
 ## Convenciones del código
 
-- **Todas** las URLs, hosts, patrones de ruta, selectores y regex viven en
-  `Services/OccConstants.cs`. No incrustes literales de OCC en otros archivos.
+- **Todas** las URLs, hosts, patrones de ruta, selectores y regex de cada sitio viven en su
+  archivo de constantes (`OccConstants.cs`, `ComputrabajoConstants.cs`). No incrustes literales.
 - Comentarios y mensajes de consola en **español**.
 - Salida JSON con `WriteIndented = true` y `JavaScriptEncoder.UnsafeRelaxedJsonEscaping`
   (para no escapar acentos). Definido en `Program.cs`.
@@ -96,7 +127,12 @@ los helpers del mismo archivo.
 
 ## Punto de fragilidad principal
 
-El scraper depende de dos cosas del HTML de OCC: el selector de tarjetas
-(`SelectorTarjeta`) y la forma de la URL de detalle (`RegexIdDetalle`). Si una corrida
-reporta `Vacantes encontradas: 0` o `Detalles obtenidos: 0`, casi siempre es porque OCC
-cambió uno de esos dos. Depura con `headless: false` en appsettings.json + `DEBUG_RESPONSES=1`.
+Ambos scrapers dependen de selectores/patrones del HTML de cada sitio:
+- **OCC**: `OccConstants.SelectorTarjeta` y `OccConstants.RegexIdDetalle`. Si reporta
+  `Vacantes encontradas: 0` o `Detalles obtenidos: 0`, OCC cambió uno de esos.
+- **Computrabajo**: los selectores de `ComputrabajoConstants` (`SelectorTarjeta`,
+  `SelectorDescripcionDetalle`, etc.). Si reporta `Vacantes encontradas: 0` o las
+  descripciones salen vacías/equivocadas, cambió el HTML.
+
+Depura con `headless: false` en appsettings.json + `DEBUG_RESPONSES=1` (Computrabajo vuelca
+el HTML de la primera página de detalle para reinspeccionar el selector de descripción).

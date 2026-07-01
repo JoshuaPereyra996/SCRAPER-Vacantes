@@ -4,13 +4,14 @@ using Microsoft.Extensions.Configuration;
 using OccScraper.Services;
 
 // ============================================================================
-//  OccScraper — punto de entrada
-//  Flujo: leer config -> lanzar Playwright -> interceptar /offer/search
-//         -> guardar JSON crudo -> parsear -> guardar JSON limpio.
+//  Scraper de vacantes — punto de entrada
+//  Flujo: leer config -> elegir sitio -> lanzar Playwright -> obtener vacantes
+//         -> guardar contenido crudo -> guardar JSON limpio.
 // ============================================================================
 
 // --- 1. Leer configuración (appsettings.json + args de consola) --------------
-// Los args sobrescriben el JSON. Uso: dotnet run -- --empleo "contador" --ciudad "monterrey"
+// Los args sobrescriben el JSON.
+// Uso: dotnet run -- --empleo "contador" --ciudad "monterrey" --sitio computrabajo
 var config = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
@@ -19,12 +20,13 @@ var config = new ConfigurationBuilder()
 
 var empleo = config["empleo"] ?? config["Busqueda:empleo"];
 var ciudad = config["ciudad"] ?? config["Busqueda:ciudad"];
+var sitio = (config["sitio"] ?? config["Busqueda:sitio"] ?? "occ").Trim().ToLowerInvariant();
 
 if (string.IsNullOrWhiteSpace(empleo) || string.IsNullOrWhiteSpace(ciudad))
 {
     Console.Error.WriteLine("Error: faltan parámetros 'empleo' y/o 'ciudad'.");
     Console.Error.WriteLine("Configúralos en appsettings.json o pásalos por consola:");
-    Console.Error.WriteLine("  dotnet run -- --empleo \"analista\" --ciudad \"ciudad-de-mexico\"");
+    Console.Error.WriteLine("  dotnet run -- --empleo \"analista\" --ciudad \"ciudad-de-mexico\" --sitio occ");
     return 1;
 }
 
@@ -33,29 +35,35 @@ empleo = NormalizarSlug(empleo);
 ciudad = NormalizarSlug(ciudad);
 
 // Opciones de Playwright desde la sección "Playwright".
-var opciones = new OccScraperOptions(
+var opciones = new OpcionesScraper(
     Headless: config.GetValue("Playwright:headless", true),
     TimeoutMs: config.GetValue("Playwright:timeoutMs", 60000),
     DelayMs: config.GetValue("Playwright:delayMs", 2000),
     UserAgent: config["Playwright:userAgent"]
         ?? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
 
-// --- Paginación (PREPARADA pero desactivada por defecto) ---------------------
-// Por defecto solo se captura la primera página. Para habilitar la paginación:
-//   1) Poner "Paginacion:habilitada" = true en appsettings.json.
-//   2) Extender OccScraperService para iterar el parámetro 'pn' (OccConstants.ParametroPagina)
-//      hasta "Paginacion:maxPaginas", acumulando las respuestas.
-// var paginacionHabilitada = config.GetValue("Paginacion:habilitada", false);
-// var maxPaginas = config.GetValue("Paginacion:maxPaginas", 1);
+// --- Selección del sitio -----------------------------------------------------
+ISitioScraper scraper;
+switch (sitio)
+{
+    case "occ":
+        scraper = new OccScraperService(opciones);
+        break;
+    case "computrabajo":
+        scraper = new ComputrabajoScraperService(opciones);
+        break;
+    default:
+        Console.Error.WriteLine($"Error: sitio '{sitio}' no soportado. Usa 'occ' o 'computrabajo'.");
+        return 1;
+}
 
-Console.WriteLine($"Búsqueda: empleo='{empleo}', ciudad='{ciudad}' (headless={opciones.Headless})");
+Console.WriteLine($"Búsqueda: sitio='{sitio}', empleo='{empleo}', ciudad='{ciudad}' (headless={opciones.Headless})");
 
 // --- 2. Ejecutar el scraper --------------------------------------------------
-string? jsonCrudo;
+ResultadoScrape? resultado;
 try
 {
-    var scraper = new OccScraperService(opciones);
-    jsonCrudo = await scraper.BuscarAsync(empleo, ciudad);
+    resultado = await scraper.BuscarAsync(empleo, ciudad);
 }
 catch (Exception ex)
 {
@@ -63,9 +71,9 @@ catch (Exception ex)
     return 2;
 }
 
-if (string.IsNullOrWhiteSpace(jsonCrudo))
+if (resultado is null || resultado.Vacantes.Count == 0)
 {
-    Console.Error.WriteLine("No se capturó ninguna respuesta de /offer/search. Nada que guardar.");
+    Console.Error.WriteLine("No se obtuvieron vacantes. Nada que guardar.");
     Console.Error.WriteLine("Sugerencia: prueba con headless=false y/o aumenta timeoutMs en appsettings.json.");
     return 3;
 }
@@ -75,8 +83,8 @@ var carpetaSalida = Path.Combine(AppContext.BaseDirectory, "output");
 Directory.CreateDirectory(carpetaSalida);
 
 var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-var rutaCruda = Path.Combine(carpetaSalida, $"raw_{empleo}_{ciudad}_{timestamp}.json");
-var rutaLimpia = Path.Combine(carpetaSalida, $"vacantes_{empleo}_{ciudad}_{timestamp}.json");
+var rutaCruda = Path.Combine(carpetaSalida, $"raw_{sitio}_{empleo}_{ciudad}_{timestamp}.{resultado.ExtensionCrudo}");
+var rutaLimpia = Path.Combine(carpetaSalida, $"vacantes_{sitio}_{empleo}_{ciudad}_{timestamp}.json");
 
 // Opciones de serialización: indentado legible y acentos sin escapar.
 var jsonOpts = new JsonSerializerOptions
@@ -85,25 +93,24 @@ var jsonOpts = new JsonSerializerOptions
     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
 };
 
-// --- 4. Guardar el JSON crudo TAL CUAL (sin modificar) -----------------------
+// --- 4. Guardar el contenido crudo TAL CUAL (sin modificar) ------------------
 try
 {
-    await File.WriteAllTextAsync(rutaCruda, jsonCrudo);
-    Console.WriteLine($"JSON crudo guardado en: {rutaCruda}");
+    await File.WriteAllTextAsync(rutaCruda, resultado.Crudo);
+    Console.WriteLine($"Contenido crudo guardado en: {rutaCruda}");
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine($"No se pudo guardar el JSON crudo: {ex.Message}");
+    Console.Error.WriteLine($"No se pudo guardar el contenido crudo: {ex.Message}");
     return 4;
 }
 
-// --- 5. Parsear a modelo limpio y guardar ------------------------------------
+// --- 5. Guardar el JSON limpio ----------------------------------------------
 try
 {
-    var vacantes = VacanteParser.Parsear(jsonCrudo, empleo, ciudad);
-    var jsonLimpio = JsonSerializer.Serialize(vacantes, jsonOpts);
+    var jsonLimpio = JsonSerializer.Serialize(resultado.Vacantes, jsonOpts);
     await File.WriteAllTextAsync(rutaLimpia, jsonLimpio);
-    Console.WriteLine($"JSON limpio guardado en: {rutaLimpia} ({vacantes.Count} vacantes)");
+    Console.WriteLine($"JSON limpio guardado en: {rutaLimpia} ({resultado.Vacantes.Count} vacantes)");
 }
 catch (Exception ex)
 {
@@ -118,6 +125,6 @@ return 0;
 //  Funciones locales auxiliares
 // ============================================================================
 
-// Convierte un texto a un slug simple compatible con las rutas de OCC.
+// Convierte un texto a un slug simple compatible con las rutas de los sitios.
 static string NormalizarSlug(string texto)
     => texto.Trim().ToLowerInvariant().Replace(' ', '-');

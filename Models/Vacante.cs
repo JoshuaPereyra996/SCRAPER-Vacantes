@@ -8,6 +8,10 @@ namespace OccScraper.Models;
 /// </summary>
 public class Vacante
 {
+    /// <summary>Sitio de origen de la vacante (ej. "occ", "computrabajo").</summary>
+    [JsonPropertyName("fuente")]
+    public string? Fuente { get; set; }
+
     /// <summary>Identificador de la vacante (jobid) tal como viene en el JSON.</summary>
     [JsonPropertyName("jobid")]
     public string? JobId { get; set; }

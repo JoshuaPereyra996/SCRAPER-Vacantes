@@ -4,16 +4,7 @@ using Microsoft.Playwright;
 namespace OccScraper.Services;
 
 /// <summary>
-/// Opciones de ejecución del scraper (mapeadas desde appsettings.json).
-/// </summary>
-public record OccScraperOptions(
-    bool Headless,
-    int TimeoutMs,
-    int DelayMs,
-    string UserAgent);
-
-/// <summary>
-/// Servicio que controla un Chromium real con Playwright.
+/// Scraper de OCC.com.mx (implementa <see cref="ISitioScraper"/>).
 ///
 /// Flujo descubierto en OCC:
 ///  1) La página de resultados (SSR) incrusta en su HTML la lista de ids de oferta
@@ -23,25 +14,38 @@ public record OccScraperOptions(
 ///     del navegador (cookies). El POST a api-collector.../offer/search es solo
 ///     telemetría (responde "OK"), no datos.
 ///
-/// Por eso: cargamos la página, extraemos los ids y pedimos el detalle de cada uno
-/// reutilizando la sesión del navegador (APIRequest comparte las cookies del contexto).
+/// Por eso: cargamos la página y hacemos clic en cada tarjeta para que el sitio dispare
+/// el fetch del detalle con la sesión correcta; interceptamos esas respuestas JSON.
 /// </summary>
-public class OccScraperService
+public class OccScraperService : ISitioScraper
 {
-    private readonly OccScraperOptions _opciones;
+    private readonly OpcionesScraper _opciones;
 
-    public OccScraperService(OccScraperOptions opciones)
+    public OccScraperService(OpcionesScraper opciones)
     {
         _opciones = opciones;
     }
 
+    public string Nombre => "occ";
+
     /// <summary>
-    /// Realiza UNA búsqueda y devuelve un array JSON crudo con el detalle de cada vacante.
+    /// Realiza UNA búsqueda: captura el detalle JSON de cada vacante y lo parsea.
     /// </summary>
-    /// <param name="empleo">Palabra clave del puesto (slug).</param>
-    /// <param name="ciudad">Ciudad (slug).</param>
-    /// <returns>JSON crudo (array de detalles), o null si no se obtuvo nada.</returns>
-    public async Task<string?> BuscarAsync(string empleo, string ciudad)
+    public async Task<ResultadoScrape?> BuscarAsync(string empleo, string ciudad)
+    {
+        var crudo = await CapturarCrudoAsync(empleo, ciudad);
+        if (string.IsNullOrWhiteSpace(crudo))
+            return null;
+
+        var vacantes = OccVacanteParser.Parsear(crudo, empleo, ciudad);
+        return new ResultadoScrape(crudo, "json", vacantes);
+    }
+
+    /// <summary>
+    /// Navega, hace clic en cada tarjeta e intercepta los detalles JSON; devuelve un
+    /// array JSON crudo con todos los detalles, o null si no se obtuvo nada.
+    /// </summary>
+    private async Task<string?> CapturarCrudoAsync(string empleo, string ciudad)
     {
         var depurar = Environment.GetEnvironmentVariable("DEBUG_RESPONSES") == "1";
 
