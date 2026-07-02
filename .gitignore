@@ -17,5 +17,12 @@ appsettings.local.json
 .idea/
 *.user
 
+# GUI: caché de sesión, bytecode y entorno virtual de Python
+gui/session_cache.json
+gui/session_cache.json.*
+__pycache__/
+*.pyc
+gui/.venv/
+
 # macOS
 .DS_Store

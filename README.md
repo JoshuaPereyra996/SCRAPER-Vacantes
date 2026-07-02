@@ -139,6 +139,33 @@ Edita `appsettings.json` para definir la búsqueda y el comportamiento del naveg
 
 ---
 
+## Interfaz gráfica (GUI)
+
+La carpeta `gui/` contiene una app de escritorio en **Python/Tkinter** que usa el
+scraper .NET como motor (subproceso), acumula varias búsquedas en una sesión y
+exporta todo a un único **Word (.docx)** con los JSON concatenados.
+
+```bash
+# Dependencia (solo para exportar a Word)
+pip install python-docx
+
+# Lanzar la GUI (requiere dotnet + Chromium de Playwright ya instalados, ver arriba)
+python3 gui/app.py
+```
+
+Flujo: elige la bolsa (OCC / Computrabajo; Indeed próximamente), escribe puesto y
+ciudad y pulsa **Iniciar Búsqueda**. Cada resultado se anexa al caché de sesión
+(`gui/session_cache.json`), que sobrevive si la app se cierra. **Siguiente Búsqueda**
+limpia los campos conservando lo acumulado. **Finalizar y Exportar** genera el .docx:
+un array JSON válido con todas las vacantes deduplicadas por `fuente`+`jobid` (cada
+una con el campo extra `busquedas` indicando qué búsquedas la produjeron), listo para
+un lector de coincidencias.
+
+Módulos: `app.py` (ventana), `scraper_runner.py` (subproceso `dotnet run` + lectura
+del JSON de salida), `session_store.py` (caché en disco), `docx_export.py` (Word).
+
+---
+
 ## Uso
 
 ### Búsqueda con los valores de `appsettings.json`
