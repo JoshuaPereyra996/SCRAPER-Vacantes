@@ -153,7 +153,10 @@ pip install python-docx
 python3 gui/app.py
 ```
 
-Flujo: elige la bolsa (OCC / Computrabajo; Indeed próximamente), escribe puesto y
+Flujo: elige la bolsa (OCC / Computrabajo / Trabajos.mx con scraper; LinkedIn e
+Indeed en modo **semi-manual**: sus términos prohíben bots, así que la app abre el
+enlace de búsqueda en tu navegador y tú pegas la liga y descripción de las vacantes
+que te interesen — se normalizan al mismo JSON), escribe puesto y
 ciudad y pulsa **Iniciar Búsqueda**. Cada resultado se anexa al caché de sesión
 (`gui/session_cache.json`), que sobrevive si la app se cierra. **Siguiente Búsqueda**
 limpia los campos conservando lo acumulado. **Finalizar y Exportar** genera el .docx:
@@ -161,8 +164,21 @@ un array JSON válido con todas las vacantes deduplicadas por `fuente`+`jobid` (
 una con el campo extra `busquedas` indicando qué búsquedas la produjeron), listo para
 un lector de coincidencias.
 
+**Modo lote:** en la pestaña "Modo lote" pega varios términos (uno por línea, p. ej.
+los 10 que te dio la IA), palomea los portales y pulsa "Ejecutar lote": la app corre
+toda la cola sola (términos × portales) con pausas, mostrando progreso, y acumula
+todo en la sesión.
+
+**Excel puntuado con IA:** el botón "📊 Excel puntuado (IA)" abre el ciclo:
+pega el CV mejorado → la app genera y copia un prompt (CV + JSON de vacantes) →
+pégalo en tu IA (claude.ai/ChatGPT) → pega su respuesta CSV (`jobid,puntaje,razon`)
+→ la app genera el Excel: ordenado por puntaje, con colores, razón de la IA,
+hipervínculos y columna Estado (lista desplegable) para el seguimiento del cliente.
+Requiere `pip install openpyxl` (ver `gui/requirements.txt`).
+
 Módulos: `app.py` (ventana), `scraper_runner.py` (subproceso `dotnet run` + lectura
-del JSON de salida), `session_store.py` (caché en disco), `docx_export.py` (Word).
+del JSON de salida), `session_store.py` (caché en disco), `docx_export.py` (Word),
+`excel_export.py` (prompt de puntaje + Excel).
 
 ---
 
@@ -182,6 +198,9 @@ dotnet run -- --empleo "contador" --ciudad "monterrey"
 
 # Computrabajo
 dotnet run -- --sitio computrabajo --empleo "contador" --ciudad "guadalajara"
+
+# Trabajos.mx (OJO: la "ciudad" es un ESTADO: ciudad-de-mexico, estado-mexico, jalisco...)
+dotnet run -- --sitio trabajos --empleo "analista" --ciudad "ciudad-de-mexico"
 ```
 
 > Cada ejecución realiza **una sola búsqueda** y captura la **primera página** de

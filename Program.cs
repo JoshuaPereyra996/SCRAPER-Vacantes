@@ -52,8 +52,11 @@ switch (sitio)
     case "computrabajo":
         scraper = new ComputrabajoScraperService(opciones);
         break;
+    case "trabajos":
+        scraper = new TrabajosScraperService(opciones);
+        break;
     default:
-        Console.Error.WriteLine($"Error: sitio '{sitio}' no soportado. Usa 'occ' o 'computrabajo'.");
+        Console.Error.WriteLine($"Error: sitio '{sitio}' no soportado. Usa 'occ', 'computrabajo' o 'trabajos'.");
         return 1;
 }
 
