@@ -32,6 +32,7 @@ SITIOS = {
     "OCC": "occ",
     "Computrabajo": "computrabajo",
     "Trabajos.mx": "trabajos",
+    "Reclutalia": "reclutalia",
     "LinkedIn (semi-manual)": "manual:linkedin",
     "Indeed (semi-manual)": "manual:indeed",
 }
@@ -46,7 +47,7 @@ DEEP_LINKS = {
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Buscador de Vacantes — OCC / Computrabajo")
+        self.title("Buscador de Vacantes — OCC / Computrabajo / Trabajos.mx / Reclutalia")
         self.geometry("760x640")
         self.minsize(640, 520)
 

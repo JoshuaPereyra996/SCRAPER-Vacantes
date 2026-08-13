@@ -4,10 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Qué es
 
-Aplicación de consola C# / .NET 8 que hace **una** búsqueda de empleo en **OCC.com.mx** o
-**Computrabajo MX** usando Playwright (Chromium headless), extrae las vacantes de la primera
-página de resultados y las guarda como JSON. Uso personal, de bajo volumen. El sitio se elige
-con `--sitio occ|computrabajo` (o en `appsettings.json` → `Busqueda:sitio`).
+Aplicación de consola C# / .NET 8 que hace **una** búsqueda de empleo en **OCC.com.mx**,
+**Computrabajo MX**, **Trabajos.mx** o **Reclutalia** (los tres primeros con Playwright /
+Chromium headless; Reclutalia por API JSON pública sin navegador), extrae las vacantes de la
+primera página de resultados y las guarda como JSON. Uso personal, de bajo volumen. El sitio
+se elige con `--sitio occ|computrabajo|trabajos|reclutalia` (o en `appsettings.json` →
+`Busqueda:sitio`).
 
 ## Comandos
 
@@ -112,6 +114,33 @@ empresa, ubicación, salario y fecha **en el HTML**. `Services/ComputrabajoScrap
 Notas: el salario sale del `<span>` padre del icono `.i_salary` (ver `SalarioLocator`); el
 selector de descripción `p.mbB` solo NO sirve (hay varios; uno es el banner "Ocultaste esta
 oferta") — por eso se ancla al contenedor `[div-link="oferta"]`.
+
+## Reclutalia: datos vía API JSON pública (sin navegador)
+
+El más simple de todos y el único que **no usa Playwright**. Reclutalia es un SPA de Next.js
+que carga las vacantes desde una API REST pública sin autenticación. `Services/ReclutaliaScraperService.cs`:
+
+1. Hace **un solo** GET HTTP con `HttpClient` a
+   `https://api.reclutalia.com/job-offers/search?tags={empleo}&offset=0&limit=50&channel=WEB&referer=WEB&env=production`.
+   Los parámetros `channel`/`referer`/`env` son **fijos y obligatorios** (sin un `channel`
+   válido la API responde `400 "No existe el valor de channel ingresado"`).
+2. La respuesta trae `data.jobOffer[]`; cada vacante ya incluye título, empresa, ubicación,
+   salario, fecha y **descripción completa** (el endpoint de detalle `/job-offers/{code}`
+   devuelve la misma descripción, así que **no** se visita cada vacante).
+3. La búsqueda de la API es por palabra clave (`tags`); es de **una sola palabra** (frases
+   multi-palabra suelen dar 0). La **ubicación NO se filtra por slug de ciudad** (el sitio
+   filtra por geocoordenadas de Google Places), así que el filtro por ciudad se hace **del
+   lado del cliente** comparando la ciudad (normalizada, sin acentos) contra la dirección de
+   cada vacante. Si ninguna coincide con la ciudad, se devuelven todas las del término.
+4. El crudo guardado es el JSON de la API (`raw_reclutalia_*.json`). La URL pública de cada
+   vacante es `https://reclutalia.com/job-offers/?jobOffer={code}`.
+
+Estructura del JSON (para el parser, en la sección `about` de cada oferta): `about.title`
+(título), `company.tradeName` (empresa), `places.address.formattedAddress` (ubicación),
+`about.salary.{minimum,maximum,salaryFixed,salaryRange}` (salario, se formatea a
+"$25,000 - $28,000 Mensual"), `publicationDate`, `about.description` y `code` (para la URL).
+Punto de fragilidad: si la API cambia estos nombres o los params fijos, ajusta
+`ReclutaliaConstants` y `ReclutaliaScraperService.Parsear`.
 
 ## Convenciones del código
 
